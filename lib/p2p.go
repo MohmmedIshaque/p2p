@@ -13,41 +13,49 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// MessageHandler is a messages callback
+// MessageHandler is a messages callback for every network packet that comes
+// from other network participants
 type MessageHandler func(message *P2PMessage, srcAddr *net.UDPAddr)
 
 // PeerToPeer - Main structure
 type PeerToPeer struct {
-	IP              string                               // Interface IP address
-	Mac             string                               // String representation of a MAC address
-	HardwareAddr    net.HardwareAddr                     // MAC address of network interface
-	Mask            string                               // Network mask in the dot-decimal notation
-	DeviceName      string                               // Name of the network interface
-	IPTool          string                               `yaml:"iptool"` // Network interface configuration tool
-	Device          *Interface                           // Network interface
-	NetworkPeers    map[string]*NetworkPeer              // Knows peers
-	UDPSocket       *Network                             // Peer-to-peer interconnection socket
-	LocalIPs        []net.IP                             // List of IPs available in the system
-	Dht             *DHTClient                           // DHT Client
-	Crypter         Crypto                               // Instance of crypto
-	Shutdown        bool                                 // Set to true when instance in shutdown mode
-	Restart         bool                                 // Instance will be restarted
-	ForwardMode     bool                                 // Skip local peer discovery
-	ReadyToStop     bool                                 // Set to true when instance is ready to stop
-	IPIDTable       map[string]string                    // Mapping for IP->ID
-	MACIDTable      map[string]string                    // Mapping for MAC->ID
-	MessageHandlers map[uint16]MessageHandler            // Callbacks
-	PacketHandlers  map[PacketType]PacketHandlerCallback // Callbacks for network packet handlers
-	RemovePeer      chan string
-	MessageBuffer   map[string]map[uint16]map[uint16][]byte
-	MessageLifetime map[string]map[uint16]time.Time
-	MessagePacket   map[string][]byte
-	BufferLock      sync.Mutex
-	PeersLock       sync.Mutex
-	IPBlacklist     []string // List of IP address that will be ignored
+	IP              string                                  // Interface IP address
+	Mac             string                                  // String representation of a MAC address
+	HardwareAddr    net.HardwareAddr                        // MAC address of network interface
+	Mask            string                                  // Network mask in the dot-decimal notation
+	DeviceName      string                                  // Name of the network interface
+	IPTool          string                                  `yaml:"iptool"` // Network interface configuration tool
+	Device          *Interface                              // Network interface
+	NetworkPeers    map[string]*NetworkPeer                 // Knows peers
+	UDPSocket       *Network                                // Peer-to-peer interconnection socket
+	LocalIPs        []net.IP                                // List of IPs available in the system
+	Dht             *DHTClient                              // DHT Client
+	Crypter         Crypto                                  // Instance of crypto
+	Shutdown        bool                                    // Set to true when instance in shutdown mode
+	Restart         bool                                    // Instance will be restarted
+	ForwardMode     bool                                    // Skip local peer discovery
+	ReadyToStop     bool                                    // Set to true when instance is ready to stop
+	IPIDTable       map[string]string                       // Mapping for IP->ID
+	MACIDTable      map[string]string                       // Mapping for MAC->ID
+	MessageHandlers map[uint16]MessageHandler               // Callbacks
+	PacketHandlers  map[PacketType]PacketHandlerCallback    // Callbacks for network packet handlers
+	RemovePeer      chan string                             // Channel of peers that should to be removed
+	MessageBuffer   map[string]map[uint16]map[uint16][]byte // Obsolete and Experimental
+	MessageLifetime map[string]map[uint16]time.Time         // Obsolete and Experimental
+	MessagePacket   map[string][]byte                       // Obsolete and Experimental
+	BufferLock      sync.Mutex                              // Mutex for buffers: Obsolete and Experimental
+	PeersLock       sync.Mutex                              // Lock for peers list to avoid double write into main map
+	IPBlacklist     []string                                // List of IP address that will be ignored
 }
 
 // AssignInterface - Creates TUN/TAP Interface and configures it with provided IP tool
+// IP tool is a platform specific application that is used by system to configure
+// network interfaces:
+// Linux - 'ip'
+// Windows - 'netsh'
+// MacOS - 'ifconfig'
+// Method reads config.yaml file, which should contain name of the iptool being used in system
+// This can be useful on Linux, when user have only 'ifconfig' tool
 func (p *PeerToPeer) AssignInterface(ip, mac, mask, device string) error {
 	var err error
 
@@ -89,10 +97,12 @@ func (p *PeerToPeer) AssignInterface(ip, mac, mask, device string) error {
 }
 
 // ListenInterface - Listens TAP interface for incoming packets
+// Every incoming packet is handled by appropriate callback method
+// which is called based on packet type (e.g. IPv4 or ARP)
+// These methods are defined in packet.go
+// On Windows platform it will also call a Run method for network interface
+// itself as a part of workaround
 func (p *PeerToPeer) ListenInterface() {
-	// Read packets received by TUN/TAP device and send them to a handlePacket goroutine
-	// This goroutine will decide what to do with this packet
-
 	// Run is for windows only
 	p.Device.Run()
 	for {
@@ -128,6 +138,8 @@ func (p *PeerToPeer) IsDeviceExists(name string) bool {
 }
 
 // GenerateDeviceName method will generate device name if none were specified at startup
+// As a base of name it uses vptp prefix followed by a number higher than pervious vptpX
+// interface name. If no vptpX interfaces found in the system it will start from 0
 func (p *PeerToPeer) GenerateDeviceName(i int) string {
 	var devName = GetDeviceBase() + fmt.Sprintf("%d", i)
 	if p.IsDeviceExists(devName) {
@@ -137,6 +149,7 @@ func (p *PeerToPeer) GenerateDeviceName(i int) string {
 }
 
 // IsIPv4 checks whether interface is IPv4 or IPv6
+// This check is required to cut out IPv6 information later
 func (p *PeerToPeer) IsIPv4(ip string) bool {
 	for i := 0; i < len(ip); i++ {
 		switch ip[i] {
@@ -151,6 +164,7 @@ func (p *PeerToPeer) IsIPv4(ip string) bool {
 
 // FindNetworkAddresses method lists interfaces available in the system and retrieves their
 // IP addresses
+// Method checks type of the interface and ignores everything besides IPv4 interfaces
 func (p *PeerToPeer) FindNetworkAddresses() {
 	Log(Info, "Looking for available network interfaces")
 	inf, err := net.Interfaces()
@@ -204,6 +218,12 @@ func (p *PeerToPeer) FindNetworkAddresses() {
 }
 
 // StartP2PInstance is an entry point of a P2P library.
+// This method is an entry point of subutai-p2p library
+//
+// First, it will generate a new MAC address for an interface
+// Then it will allocate memory for different maps, populate list of system network interfaces,
+// validate provided arguments etc
+// If everything went OK during startup process it will return PeerToPeer object reference, nil otherwise
 func StartP2PInstance(argIP, argMac, argDev, argDirect, argHash, argDht, argKeyfile, argKey, argTTL, argLog string, fwd bool, port int, ignoreIPs []string) *PeerToPeer {
 
 	var hw net.HardwareAddr
@@ -381,7 +401,10 @@ func StartP2PInstance(argIP, argMac, argDev, argDirect, argHash, argDht, argKeyf
 	return p
 }
 
-// StartDHT starts a DHT client
+// StartDHT starts a DHT client.
+// DHT client established a connection to configured DHT servers
+// If connection cannot be established for any reason, this method
+// will try to establish connection again after some period of time
 func (p *PeerToPeer) StartDHT(hash, routers string) {
 	dhtClient := new(DHTClient)
 	config := dhtClient.DHTClientConfig()
@@ -534,6 +557,9 @@ func (p *PeerToPeer) SyncForwarders() int {
 }
 
 // WriteToDevice writes data to created TUN/TAP device
+//
+// Method will create a new packet with provided data, which was received
+// over p2p network and send it to TUN/TAP device
 func (p *PeerToPeer) WriteToDevice(b []byte, proto uint16, truncated bool) {
 	var packet Packet
 	packet.Protocol = int(proto)
@@ -569,6 +595,9 @@ func GenerateMAC() (string, net.HardwareAddr) {
 
 // ParseIntroString receives a comma-separated string with ID, MAC and IP of a peer
 // and returns this data
+//
+// Intro string is received during handshake procedure and contains all the data necessary
+// for p2p to register a new peer
 func (p *PeerToPeer) ParseIntroString(intro string) (string, net.HardwareAddr, net.IP) {
 	parts := strings.Split(intro, ",")
 	if len(parts) != 3 {
@@ -594,6 +623,11 @@ func (p *PeerToPeer) ParseIntroString(intro string) (string, net.HardwareAddr, n
 }
 
 // HandleP2PMessage is a handler for new messages received from P2P network
+//
+// This method will parse message received over p2p message, unmarshal it and
+// perform action based on packet type.
+// If security key were provided it will also decrypt packet payload if
+// packet type is Intro, Normal message or Intro request
 func (p *PeerToPeer) HandleP2PMessage(count int, srcAddr *net.UDPAddr, err error, rcvBytes []byte) {
 	if err != nil {
 		Log(Error, "P2P Message Handle: %v", err)
@@ -638,6 +672,10 @@ func (p *PeerToPeer) HandlePingMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 }
 
 // HandleXpeerPingMessage receives a cross-peer ping message
+//
+// This ping message notifies current peer about other peer being live.
+// Also this method prepares a response message and sends it back to
+// peer that pinged us
 func (p *PeerToPeer) HandleXpeerPingMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 	pt := PingType(msg.Header.NetProto)
 	if pt == PingReq {
@@ -668,6 +706,12 @@ func (p *PeerToPeer) HandleXpeerPingMessage(msg *P2PMessage, srcAddr *net.UDPAdd
 }
 
 // HandleIntroMessage receives an introduction string from another peer during handshake
+//
+// When introduction message is received from another peer we check if know anything
+// about this peer. If peer is completely unknown for us we will terminate
+// this method execute and request known peers from Peer Discovery Service
+// If peer is known, we will extract introduction information about new peer
+// and set it to a peer with appropriate ID
 func (p *PeerToPeer) HandleIntroMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 	Log(Info, "Introduction string from %s[%d]", srcAddr, msg.Header.ProxyID)
 	id, mac, ip := p.ParseIntroString(string(msg.Data))
@@ -706,6 +750,11 @@ func (p *PeerToPeer) HandleIntroMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 }
 
 // HandleIntroRequestMessage is a handshake request from another peer
+//
+// This method will response to an intro request with introduction message.
+// If peer that sent this request is unknown for p2p we will request updated peers information
+// from Peer Discovery Service and not send any introduction message unless
+// we know anything about this peer
 func (p *PeerToPeer) HandleIntroRequestMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 	id := string(msg.Data)
 	p.PeersLock.Lock()
@@ -726,6 +775,10 @@ func (p *PeerToPeer) HandleIntroRequestMessage(msg *P2PMessage, srcAddr *net.UDP
 }
 
 // HandleProxyMessage receives a control packet from proxy
+//
+// This method will handle information about control peer for a
+// particular peer. This means that all traffic for this peer will
+// be forwarded over this proxy peer
 func (p *PeerToPeer) HandleProxyMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 	// Proxy registration data
 	if msg.Header.ProxyID < 1 {
@@ -747,6 +800,12 @@ func (p *PeerToPeer) HandleProxyMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 }
 
 // HandleBadTun notified peer about proxy being malfunction
+//
+// This will cleanup information that we know about this peer and set peer
+// back to INIT state.
+//
+// Generally this may happen only when proxy peer died in the middle
+// of sessions which should rarely happen naturally
 func (p *PeerToPeer) HandleBadTun(msg *P2PMessage, srcAddr *net.UDPAddr) {
 	for key, peer := range p.NetworkPeers {
 		if peer.ProxyID == int(msg.Header.ProxyID) && peer.Endpoint.String() == srcAddr.String() {
@@ -766,6 +825,10 @@ func (p *PeerToPeer) HandleBadTun(msg *P2PMessage, srcAddr *net.UDPAddr) {
 
 // HandleTestMessage responses with a test message when another peer trying to
 // establish direct connection
+//
+// Test message is a special not encrypted message that is sent from one
+// peer to another to verify it target peer's port is open and accessible
+// This message is a part of NAT traversal mechanism we use
 func (p *PeerToPeer) HandleTestMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 	response := CreateTestP2PMessage(p.Crypter, "TEST", 0)
 	_, err := p.UDPSocket.SendMessage(response, srcAddr)
@@ -776,6 +839,13 @@ func (p *PeerToPeer) HandleTestMessage(msg *P2PMessage, srcAddr *net.UDPAddr) {
 }
 
 // SendTo sends a p2p packet by MAC address
+//
+// Prepared p2p message will be sent to peer with specified Hardware address
+// If specified MAC is unknown, we will not send anything nor report any errors
+// to avoid log spam, because this situation may happen relatively often, e.g.
+// when active ping application continues to send packets over malfunction
+// network or ping started before peer discovery and handshake routines were
+// finished
 func (p *PeerToPeer) SendTo(dst net.HardwareAddr, msg *P2PMessage) (int, error) {
 	// TODO: Speed up this by switching to map
 	Log(Trace, "Requested Send to %s", dst.String())
@@ -796,6 +866,17 @@ func (p *PeerToPeer) SendTo(dst net.HardwareAddr, msg *P2PMessage) (int, error) 
 }
 
 // StopInstance stops current instance
+//
+// Stop procedure is pretty much complex if we want to terminate
+// everything correctly.
+// First it will go over list of known peers and set them to 'Disconnect' state
+// This will allow system to notify other network participants about graceful shutdown
+// along with Peer Discovery Service
+// Then method will wait for every peer to shutdown (limited to 5 seconds)
+// When every peer was shutdown (or not) we stop Peer Discovery Service,
+// P2P Network socket and turn the whole instance state to 'Shutdown' mode
+// Also we will send fake p2p message to ourselves to unblock UDP Socket
+// At the end it will wait for 3 seconds to terminate everything
 func (p *PeerToPeer) StopInstance() {
 	p.PeersLock.Lock()
 	for i, peer := range p.NetworkPeers {
