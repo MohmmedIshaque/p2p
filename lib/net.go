@@ -9,30 +9,33 @@ import (
 
 // Constants
 const (
-	MagicCookie uint16 = 0xabcd
-	HeaderSize  int    = 18
+	MagicCookie uint16 = 0xabcd // Used to filter traffic not related to subutai-p2p
+	HeaderSize  int    = 18     // Size of a network header
 )
 
-// P2PMessageHeader is header used in cross-peer packets
+// P2PMessageHeader is a header used in cross-peer packets
+// Message header is appended to every packet received by TUN/TAP interface
+// TODO: Remove ID and Seq
 type P2PMessageHeader struct {
-	Magic         uint16
-	Type          uint16
-	Length        uint16
-	NetProto      uint16
-	ProxyID       uint16
-	SerializedLen uint16
-	Complete      uint16
-	ID            uint16
-	Seq           uint16
+	Magic         uint16 // Magic cookie
+	Type          uint16 // Type of a packet
+	Length        uint16 // Length of a packet
+	NetProto      uint16 // Protocol that was extracted from source packet (payload)
+	ProxyID       uint16 // ID of a proxy peer
+	SerializedLen uint16 // Length of a serialized packet
+	Complete      uint16 // Whether packet truncated or not
+	ID            uint16 // ID was used in previous versions
+	Seq           uint16 // Seq was used in previous versions
 }
 
 // P2PMessage is a cross-peer message packet
 type P2PMessage struct {
-	Header *P2PMessageHeader
-	Data   []byte
+	Header *P2PMessageHeader // P2P Packet Header
+	Data   []byte            // P2P Packet Payload
 }
 
 // Serialize does a header serialization
+// Method return a byte slice
 func (v *P2PMessageHeader) Serialize() []byte {
 	resBuf := make([]byte, HeaderSize)
 	binary.BigEndian.PutUint16(resBuf[0:2], v.Magic)
@@ -48,6 +51,10 @@ func (v *P2PMessageHeader) Serialize() []byte {
 }
 
 // P2PMessageHeaderFromBytes extracts message header from received packet
+// The byte slice should be provided as an input and it should be exact
+// the same size as HeaderSize constant. if it's not - method will return
+// an error.
+// Method returns a P2PMessageHeader structure
 func P2PMessageHeaderFromBytes(bytes []byte) (*P2PMessageHeader, error) {
 	if len(bytes) < HeaderSize {
 		return nil, errors.New("P2PMessageHeaderFromBytes_error : less then 14 bytes")
@@ -67,11 +74,16 @@ func P2PMessageHeaderFromBytes(bytes []byte) (*P2PMessageHeader, error) {
 }
 
 // GetProxyAttributes returns information related to current proxy in a message header
+// This method is used by proxy peers to not to parse the whole packet and just
+// extract necessary information about the tunnel ID to pass traffic further
 func GetProxyAttributes(bytes []byte) (uint16, uint16) {
 	return binary.BigEndian.Uint16(bytes[8:10]), binary.BigEndian.Uint16(bytes[2:4])
 }
 
 // Serialize constructs a P2P message
+// First it calculates the length of payload and updates Header's field
+// SerializedLen. Then it serializes header and appens payload to the
+// resulting byte slice
 func (v *P2PMessage) Serialize() []byte {
 	v.Header.SerializedLen = uint16(len(v.Data))
 	Log(Trace, "--- Serialize P2PMessage header.SerializedLen : %d", v.Header.SerializedLen)
@@ -80,7 +92,9 @@ func (v *P2PMessage) Serialize() []byte {
 	return resBuf
 }
 
-// P2PMessageFromBytes extract a payload from received packet
+// P2PMessageFromBytes deserializes packet to P2PMessage
+// This method will parse message header and extract payload
+// from it of exact length (SerializedLen)
 func P2PMessageFromBytes(bytes []byte) (*P2PMessage, error) {
 	res := new(P2PMessage)
 	var err error
@@ -284,9 +298,7 @@ func CreateBadTunnelP2PMessage(id int, netProto uint16) *P2PMessage {
 	return msg
 }
 
-///////////////////////////////////////////////////////////////////////////////////////////
-
-// Network is a network subsystem
+// Network is a peer-to-peer network subsystem
 type Network struct {
 	host     string
 	port     int
@@ -311,7 +323,7 @@ func (uc *Network) Addr() *net.UDPAddr {
 	return uc.addr
 }
 
-// Init creates a UDP connection
+// Init creates a UDP connection with specified host and port
 func (uc *Network) Init(host string, port int) error {
 	var err error
 	uc.host = host
@@ -331,7 +343,7 @@ func (uc *Network) Init(host string, port int) error {
 	return nil
 }
 
-// GetPort return a port assigned
+// GetPort returns a port assigned
 func (uc *Network) GetPort() int {
 	addr, _ := net.ResolveUDPAddr("udp", uc.conn.LocalAddr().String())
 	return addr.Port
@@ -350,11 +362,16 @@ func (uc *Network) Listen(receivedCallback UDPReceivedCallback) {
 }
 
 // Bind is depricated
+// TODO: Remove bind
 func (uc *Network) Bind(addr *net.UDPAddr, localAddr *net.UDPAddr) {
 
 }
 
-// SendMessage sends message over network
+// SendMessage sends message over p2p network
+// P2PMessage will be serialized and written to a network connection interface
+// pointing to a dstAddr as a destination
+// Will return the amount of bytes written and any errors or nil if
+// everything went well
 func (uc *Network) SendMessage(msg *P2PMessage, dstAddr *net.UDPAddr) (int, error) {
 	n, err := uc.conn.WriteToUDP(msg.Serialize(), dstAddr)
 	if err != nil {
@@ -364,6 +381,8 @@ func (uc *Network) SendMessage(msg *P2PMessage, dstAddr *net.UDPAddr) (int, erro
 }
 
 // SendRawBytes sends bytes over network
+// This method is similar to SendMessage, but it takes a byte slice as
+// an argument instead of P2PMessage
 func (uc *Network) SendRawBytes(bytes []byte, dstAddr *net.UDPAddr) (int, error) {
 	n, err := uc.conn.WriteToUDP(bytes, dstAddr)
 	if err != nil {

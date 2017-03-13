@@ -1,3 +1,14 @@
+/*
+p2p or subutai-p2p is an application to build private mesh networks.
+
+Architecture
+
+p2p library consists of:
+* Peer Discovery Service (formely DHT)
+* Network subsystem which passes traffic across peers
+* Proxy peers
+* AES encryption
+*/
 package ptp
 
 import (

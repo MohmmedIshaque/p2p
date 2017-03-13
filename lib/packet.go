@@ -1,17 +1,5 @@
 package ptp
 
-/*
-	Know packet types:
-		512   (PUP)
-		2048  (IP)
-		2054  (ARP)
-		32821 (RARP)
-		33024 (802.1q)
-		34525 (IPv6)
-		34915 (PPPOE discovery)
-		34916 (PPPOE session)
-*/
-
 import (
 	"encoding/binary"
 	"errors"
@@ -20,8 +8,6 @@ import (
 	"net"
 
 	"github.com/mdlayher/ethernet"
-	//"runtime"
-	//"crypto/md5"
 )
 
 // PacketType is a type of the IPv4 packet
@@ -32,16 +18,16 @@ type PacketHandlerCallback func(data []byte, proto int)
 
 // Packet Types
 const (
-	EthPacketSize        int        = 512
-	PacketPARCUniversal  PacketType = 512
-	PacketIPv4           PacketType = 2048
-	PacketARP            PacketType = 2054
-	PacketRARP           PacketType = 32821
-	Packet8021Q          PacketType = 33024
-	PacketIPv6           PacketType = 34525
-	PacketPPPoEDiscovery PacketType = 34915
-	PacketPPPoESession   PacketType = 34916
-	PacketLLDP           PacketType = 35020
+	EthPacketSize        int        = 512   // Packet  size
+	PacketPARCUniversal  PacketType = 512   // PUP - PARC Universal
+	PacketIPv4           PacketType = 2048  // IPv4
+	PacketARP            PacketType = 2054  // ARP
+	PacketRARP           PacketType = 32821 // RARP
+	Packet8021Q          PacketType = 33024 // 802.1q
+	PacketIPv6           PacketType = 34525 // IPv6
+	PacketPPPoEDiscovery PacketType = 34915 // PPPoE Discovery
+	PacketPPPoESession   PacketType = 34916 // PPPoE Session
+	PacketLLDP           PacketType = 35020 // LLDP
 )
 
 var (

@@ -1,3 +1,21 @@
+/*
+Subutai P2P Application
+
+Using a subutai-p2p library this application creates private mesh networks.
+Most of a functionality documented in /lib/ directory, which contains library
+documentation.
+
+Overview
+
+Building the network process is very simple and can be desribed by these steps:
+1. Establish UDP connection to a Peer Discovery Service (PDS), and receive an unique ID for network session
+2. Retrieve information from PDS about known peers for a particular hash
+3. Try to connect those peers directly over LAN (if they are close) or via Internet
+4. Request proxy peers from PDS in case direct connection is not possible
+5. Handshake with proxy peers and notify target peers about this proxy with use of PDS
+6. Establish connection with peers over proxy
+
+*/
 package main
 
 import (
